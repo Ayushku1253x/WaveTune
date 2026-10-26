@@ -15,6 +15,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,12 +29,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-35" \
+          yes | "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" \
+            "platforms;android-35" \
             "build-tools;35.0.0" \
             "platform-tools"
 
@@ -45,7 +48,7 @@ jobs:
           mkdir -p source
           unzip -q WaveTune-Android-Source.zip -d source
           test -f source/settings.gradle.kts
-          echo "WaveTune source extracted successfully"
+          echo "Source extracted successfully"
 
       - name: Build WaveTune APK
         run: gradle -p source assembleDebug
