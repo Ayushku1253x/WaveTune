@@ -1,0 +1,60 @@
+
+name: Build WaveTune APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "WaveTune-Android-Source.zip"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --licenses
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Check source ZIP
+        run: |
+          test -f WaveTune-Android-Source.zip
+          unzip -l WaveTune-Android-Source.zip
+
+      - name: Extract source
+        run: |
+          mkdir -p source
+          unzip -q WaveTune-Android-Source.zip -d source
+          test -f source/settings.gradle.kts
+
+      - name: Build APK
+        run: gradle -p source assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaveTune-debug-apk
+          path: source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
