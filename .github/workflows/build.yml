@@ -4,8 +4,6 @@ name: Build WaveTune APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     paths:
       - "WaveTune-Android-Source.zip"
       - ".github/workflows/build.yml"
@@ -28,51 +26,34 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Find Android SDK
+      - name: Locate Android SDK
         shell: bash
         run: |
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-
           if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
             for P in /usr/local/lib/android/sdk /opt/android-sdk /usr/lib/android-sdk; do
-              if [ -d "$P" ]; then
-                SDK="$P"
-                break
-              fi
+              if [ -d "$P" ]; then SDK="$P"; break; fi
             done
           fi
-
           if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
-            echo "::error::Android SDK not found on runner."
+            echo "::error::Android SDK was not found on this runner."
             exit 1
           fi
-
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "Found SDK: $SDK"
-
           SM="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
-
-          if [ -n "$SM" ]; then
-            echo "SDKMANAGER=$SM" >> "$GITHUB_ENV"
-            echo "Found sdkmanager: $SM"
-          else
-            echo "sdkmanager not found; checking installed SDK packages."
-          fi
+          if [ -n "$SM" ]; then echo "SDKMANAGER=$SM" >> "$GITHUB_ENV"; fi
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           if [ -n "${SDKMANAGER:-}" ]; then
             yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
-
             "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-              "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "platform-tools"
+              "platforms;android-35" "build-tools;35.0.0" "platform-tools"
           else
             test -d "$ANDROID_HOME/platforms/android-35" || {
-              echo "::error::Android SDK platform 35 is missing."
+              echo "::error::Android SDK Platform 35 is not installed and sdkmanager is unavailable."
               exit 1
             }
           fi
@@ -82,42 +63,31 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Check source ZIP
-        shell: bash
+      - name: Validate source archive
         run: |
-          if [ ! -f "WaveTune-Android-Source.zip" ]; then
-            echo "::error::WaveTune-Android-Source.zip is missing from repository root."
-            exit 1
-          fi
+          test -f WaveTune-Android-Source.zip
+          unzip -t WaveTune-Android-Source.zip
 
-          unzip -t "WaveTune-Android-Source.zip"
-
-      - name: Extract source and find project
+      - name: Extract source
         shell: bash
         run: |
           mkdir -p source
-          unzip -q "WaveTune-Android-Source.zip" -d source
-
+          unzip -q WaveTune-Android-Source.zip -d source
           SETTINGS="$(find source -type f -name settings.gradle.kts -print -quit)"
-
           if [ -z "$SETTINGS" ]; then
             SETTINGS="$(find source -type f -name settings.gradle -print -quit)"
           fi
-
           if [ -z "$SETTINGS" ]; then
-            echo "::error::No settings.gradle or settings.gradle.kts found in ZIP."
+            echo "::error::Gradle settings file not found in source ZIP."
             find source -maxdepth 4 -type f | head -n 100
             exit 1
           fi
-
           PROJECT_DIR="$(dirname "$SETTINGS")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project found: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
       - name: Build debug APK
-        shell: bash
-        run: |
-          gradle -p "$PROJECT_DIR" assembleDebug
+        run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
