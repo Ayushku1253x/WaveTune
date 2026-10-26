@@ -1,0 +1,124 @@
+
+name: Publish WaveTune Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version, e.g. 1.0.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build release APK and publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate and extract source ZIP
+        shell: bash
+        run: |
+          test -f WaveTune-Android-Source.zip || {
+            echo "::error::Upload WaveTune-Android-Source.zip to the repository root first."
+            exit 1
+          }
+          unzip -t WaveTune-Android-Source.zip
+          mkdir -p source
+          unzip -q WaveTune-Android-Source.zip -d source
+          SETTINGS="$(find source -type f -name settings.gradle.kts -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            SETTINGS="$(find source -type f -name settings.gradle -print -quit)"
+          fi
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::Gradle settings file was not found inside the ZIP."
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Use a version such as 1.0.1"
+            exit 1
+          fi
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          python3 - "$PROJECT_DIR/app/build.gradle.kts" "$VERSION" "$CODE" <<'PYCODE'
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          s, n1 = re.subn(r'versionCode\s*=\s*\d+', f'versionCode = {sys.argv[3]}', s, count=1)
+          s, n2 = re.subn(r'versionName\s*=\s*"[^"]+"', f'versionName = "{sys.argv[2]}"', s, count=1)
+          if not n1 or not n2:
+              raise SystemExit("Could not update versionCode/versionName. Check app/build.gradle.kts.")
+          p.write_text(s)
+          PYCODE
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Check signing secrets
+        shell: bash
+        env:
+          WAVETUNE_KEYSTORE_BASE64: ${{ secrets.WAVETUNE_KEYSTORE_BASE64 }}
+          WAVETUNE_KEYSTORE_PASSWORD: ${{ secrets.WAVETUNE_KEYSTORE_PASSWORD }}
+          WAVETUNE_KEY_ALIAS: ${{ secrets.WAVETUNE_KEY_ALIAS }}
+          WAVETUNE_KEY_PASSWORD: ${{ secrets.WAVETUNE_KEY_PASSWORD }}
+        run: |
+          for NAME in WAVETUNE_KEYSTORE_BASE64 WAVETUNE_KEYSTORE_PASSWORD WAVETUNE_KEY_ALIAS WAVETUNE_KEY_PASSWORD; do
+            if [ -z "${!NAME}" ]; then
+              echo "::error::Missing Actions secret: $NAME"
+              exit 1
+            fi
+          done
+          echo "Signing secrets are present."
+          echo "::notice::The Android Gradle build must be configured to use these signing secrets before this workflow can publish a valid signed update."
+
+      - name: Build release APK
+        run: gradle -p "$PROJECT_DIR" assembleRelease --stacktrace
+
+      - name: Verify release APK
+        run: |
+          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK" || {
+            echo "::error::Release APK was not generated."
+            exit 1
+          }
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
+          gh release create "v${VERSION}" "$APK" \
+            --title "WaveTune ${VERSION}" \
+            --notes "WaveTune Android update ${VERSION}. Install over the existing app only when its signing certificate matches."
